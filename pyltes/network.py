@@ -266,6 +266,7 @@ class GeoCellularNetwork(CellularNetwork):
         self.lat0 = lat0
         self.lon0 = lon0
         self.alt0 = alt0
+        self.origin = (0,0)
         
         self.boundary = None
         self.buildings = None #optional
@@ -346,6 +347,9 @@ class GeoCellularNetwork(CellularNetwork):
                 bs.insidePower = 37
                 bs.outsidePower = 40
                 bs.angle = azimuth
+                # start and end angles of the beam (counted counter-clockwise from the x-axis)
+                bs.beam_start = (azimuth - beamwidth + 360)%360
+                bs.beam_end = (azimuth + beamwidth + 360)%360
                 bs.ID = len(self.bs)
                 bs.turnedOn = True
                 bs.beamwidth = beamwidth

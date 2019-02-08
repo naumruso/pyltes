@@ -55,8 +55,8 @@ class UE(NetworkDevice):
             self.visibility[BS.ID] = self.is_visible(BS)
             return self.visibility[BS.ID]
 
-    # needs improvement to allow for variable width of the arc
-    def is_visible(self, BS):
+    def __is_visible(self, BS):
+        """obsolete"""
         if BS.omnidirectionalAntenna == True:
             return True
         #returns true if angle allow signal receive, else False
@@ -74,6 +74,45 @@ class UE(NetworkDevice):
             alpha_diff = ue_angle - BS.angle
         if alpha_diff <= BS.beamwidth or alpha_diff >= 360-BS.beamwidth:
             return True
+        else:
+            return False
+    
+    def is_visible(self, BS):
+        if BS.omnidirectionalAntenna:
+            return True
+        
+        dist = self.distanceToBS(BS)
+        if dist == 0 or not BS.turnedOn:
+            return False
+        
+        return self.is_inside(BS.beam_start, BS.beam_end)
+
+    def is_inside(self, start, end):
+        """
+        Checks whether the device is between the angles start and end.
+        The angles are measured counter-clockwise from the x-axis.
+        """
+        if start < 0:
+            start = (start+360)%360
+        if end < 0:
+            end = (end+360)%360
+
+        angle = math.degrees(math.atan2(self.y, self.x))
+        if angle < 0:
+            angle = angle + 360
+
+        if start < end:
+            if start < angle < end:
+                return True
+            else:
+                return False
+        elif start > end:
+            if angle > end and angle > start:
+                return True
+            elif angle < end and angle < start:
+                return True
+            else:
+                return False
         else:
             return False
 
