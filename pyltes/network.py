@@ -9,6 +9,13 @@ import random
 import pickle
 import copy
 
+import numpy as np
+
+import pymap3d
+
+from shapely.geometry import Point, Polygon
+from shapely.ops import cascaded_union
+
 
 class CellularNetwork:
     """Class describing cellular network"""
@@ -28,7 +35,7 @@ class CellularNetwork:
         self.Printer = printer.Printer(self)
         self.powerConfigurator = []
         self.colorConfigurator = []
-	
+        
     def loadPowerConfigurator(self):
         from pyltes import powerConfigurator
         self.powerConfigurator = powerConfigurator.pygmoPowerConfigurator(self)
@@ -45,7 +52,7 @@ class CellularNetwork:
     def loadNetworkFromFile(cls, filename):
         with open(filename+".pnf", 'rb') as f:
             return pickle.load(f)
-	
+        
     def addOneBSTower(self, x_pos, y_pos, omnidirectional = False):
         if omnidirectional == False:
             for i in range(3):
@@ -58,7 +65,7 @@ class CellularNetwork:
                 bs.ID = len(self.bs)
                 bs.turnedOn = True
                 self.bs.append(copy.deepcopy(bs))
-	
+        
     def printPowersInBS(self):
         powers = []
         for bs in self.bs:
@@ -238,3 +245,238 @@ class CellularNetwork:
             sumOfInternalThroughput = sumOfInternalThroughput/internalBS
         sumOfThroughput = sumOfExternalThroughput + sumOfInternalThroughput
         return sumOfThroughput
+
+
+
+class GeoCellularNetwork(CellularNetwork):
+    """ A class that creates a Cellular Network object
+    that is defined as a geographical place. 
+    
+    The object has base stations that are read from a cell-db file,
+    and a list of polygons that define the boundaries of the place
+    and the buildings inside the place. No deep checks are made.
+
+    Oprionally we can add the transmission power of each cell, if that 
+    has been previously computed.
+    """
+    def __init__(self, lat0, lon0, alt0):
+        """(lat0, lon0, alt0) are GRS84 coordinates in degrees relative to
+        which the coordinates of the local tangential system are computed."""
+        CellularNetwork.__init__(self)
+        self.lat0 = lat0
+        self.lon0 = lon0
+        self.alt0 = alt0
+        
+        self.boundary = None
+        self.buildings = None #optional
+
+    def loadBoundary(self, polygon):
+        """
+        Polygon is a list of tuples (lat, lon) in degrees that
+        define the boundary of the place in geodetic coordinates.
+        
+        The boundary has to be closed to make sense in this case."""
+        coordinates = []
+        for (lat, lon) in polygon:
+            x, y, _ = pymap3d.geodetic2enu(lat, lon, 1.0, self.lat0, self.lon0, self.alt0)
+            coordinates.append((x,y))
+
+        if len(coordinates) > 2:
+            self.boundary = Polygon(coordinates)
+
+        if not self.boundary.is_valid:
+            raise ValueError("Boundary of place not closed. coordinates={}".format(coordinates))
+
+    def loadBuildings(self, buildings):
+        """
+        Buildings is a list of closed polygons that
+        define each building that is located inside the place.
+        
+        Each polygon is a list of tuples (lat, lon) in degrees
+        that define the boundary of the building. Note that each
+        polygon has to be closed for the calculations to make sense.
+        """
+        self.buildings = []
+        for building in buildings:
+            coordinates = []
+            for (lat, lon) in building:
+                x, y, _ = pymap3d.geodetic2enu(lat, lon, 1.0, self.lat0, self.lon0, self.alt0)
+                coordinates.append((x,y))
+
+            polygon = Polygon(coordinates)
+            if not polygon.is_valid:
+                raise ValueError("Invalid polygon for building, coordinates={}".format(coordinates))
+
+            self.buildings.append(polygon)
+            # self.buildings_union = cascaded_union(self.buildings) #one representative polygon for all buildings
+
+    def loadCells(self, cells, delta_dist=1500):
+        """
+        Instantiates the base stations that are inside the boundary of the place.
+        If we need multiple base stations with a different azimuth, then they
+        should be present in the input table.
+        
+        The input variable is an iterable where each row has the following fields:
+        'cellname': string,
+        'bslat': float,
+        'bslon': float,
+        'antennaheight': float,
+        'azimuth': int,
+        'horizbeamwidth': int
+        (not all of the fields are currently used)
+        """
+        self.bs = []
+        for cell in cells:
+            cellname = cell['cellname']
+            bslat = cell['bslat']
+            bslon = cell['bslon']
+            bsalt = cell['antennaheight']
+            azimuth = cell['azimuth']
+            azimuth = (360 - azimuth + 90)%360 # to trigonometic system (angles counted counter-clockwise from the x-axis)
+            beamwidth = cell['horizbeamwidth'] # half the beam width, actually.
+
+            # convert the Cell's coordinates to our local tangential system
+            x, y, _ = pymap3d.geodetic2enu(bslat, bslon, bsalt, self.lat0, self.lon0, self.alt0)
+
+            if self.boundary.contains(Point(x,y)):
+                # now create the base station
+                bs = devices.BS()
+                bs.x = x
+                bs.y = y
+                bs.insidePower = 37
+                bs.outsidePower = 40
+                bs.angle = azimuth
+                bs.ID = len(self.bs)
+                bs.turnedOn = True
+                bs.beamwidth = beamwidth
+                bs.cell = cell
+                self.bs.append(copy.deepcopy(bs))
+            else:
+                print("Warning: skipped cell with coordinates: ({:11.7f},{:11.7f}). Outside of boundary.".format(bslat, bslon))
+
+        # finds "the bounding box" of the place
+        x_all = [bs.x for bs in self.bs]
+        y_all = [bs.y for bs in self.bs]
+
+        xmax = np.max(x_all)
+        xmin = np.min(x_all)
+
+        ymax = np.max(y_all)
+        ymin = np.min(y_all)
+
+        # the rectange defined by these specifies the max. size of the place
+        # adds delta_dist to not get too close to the base stations
+        self.constraintAreaMaxX = (xmax - xmin) + delta_dist
+        self.constraintAreaMaxY = (ymax - ymin) + delta_dist
+
+        # lowest most left point on the plot
+        self.origin = (xmin - delta_dist/2, ymin - delta_dist/2)
+                     # (xmax + delta_dist/2, ymax + delta_dist/2))
+
+    def generateDevices(self, N=100, frac=0.8):
+        """
+        Generates N number of UE devices so that N*frac of them
+        (set by parameter frac) are outside and N*(1-frac) of the
+        UE's are inside buidings.
+        """
+        gen_coord_x = lambda: random.uniform(self.origin[0],self.origin[0] + self.constraintAreaMaxX)
+        gen_coord_y = lambda: random.uniform(self.origin[1],self.origin[1] + self.constraintAreaMaxY)
+        
+        n_outside_max = N * frac
+        n_inside_max = N * (1 - frac)
+        
+        n_outside = 0
+        n_inside = 0
+        n_total = 0
+        number = 0
+        while n_total < N:
+            x = gen_coord_x()
+            y = gen_coord_y()
+            p = Point(x,y)
+
+            if self.boundary.contains(p):
+                if np.any([building.contains(p) for building in self.buildings]):
+                # if self.buildings_union.contains(p):
+                    if n_inside < n_inside_max:
+                        ue = devices.UE()
+                        ue.ID = number
+                        ue.x = x
+                        ue.y = y
+                        self.ue.append(ue)
+                        number += 1
+                        n_inside += 1
+                else:
+                    if n_outside < n_outside_max:
+                        ue = devices.UE()
+                        ue.ID = number
+                        ue.x = x
+                        ue.y = y
+                        self.ue.append(ue)
+                        number += 1
+                        n_outside += 1
+                n_total = n_inside + n_outside
+
+    def outputRF(self, max_neighbors=7, bandwidth=20):
+        """
+        After all UE's have been generated and connected to the best BS,
+        we can compute the SINR, RSSI, RSRP, and RSRQ for the base station,
+        to which the UE is connected and a number of nearest neighbours, 
+        which is set by the input parameter max_neighbors.
+
+        The input (channel) bandwidth is used for the computattion of RSRP & RSRQ.
+        They both depend on the number of resource blocks per channel.
+
+        Acceptable valules for bandwidth are :
+            [1.4, 3.0, 5.0, 10.0, 15.0, 20.0], which correspond to
+            [6, 15, 25, 50, 75, 100] resource blocks, accordingly.
+
+        RSRP = RSSI – 10LOG(12*N)
+        RSRQ = N*(RSRP/RSSI)
+        """
+
+        # These are for the base station to which the phone is attached
+        all_radio_measurements = []
+        for ue in self.ue:
+            # returns ta, rssi, rsrp, rsrq, sinr, ue.ID for the serving cell
+            ue_radio_meas = ue.radio_quantities(self.bs, bandwidth=bandwidth)
+
+            # only neighbors that are visible from the UE
+            neighbors = []
+            distances = []
+            for bs in self.bs:
+                if ue.isSeenFromBS(bs):
+                    neighbors.append(bs.ID)
+                    distances.append(ue.distanceToBS(bs))
+
+            # going through the closest neighbors
+            serving_cell_init = ue.connectedToBS*1 # copying for safe-keeping
+            ineighbor = 0
+            for idx in np.argsort(distances):
+                # skip the serving cell, we have information about it.
+                if neighbors[idx] == serving_cell_init:
+                    continue
+                
+                ue.connectedToBS = neighbors[idx]
+                meas_ = ue.radio_quantities(self.bs, bandwidth=bandwidth)
+                meas_.pop('rssi') # this is the same for one UE
+                ue_radio_meas[ineighbor] = meas_
+                ineighbor += 1 # added one neighbor
+
+                # stops the cycle once we've found sufficient number of neighbors
+                if ineighbor >= max_neighbors:
+                    break
+
+            # adding the information about the position of the device
+            lat, lon, alt = pymap3d.enu2geodetic(ue.x, ue.y, 1.0, self.lat0, self.lon0, self.alt0)
+            ue_radio_meas['lat'] = np.round(lat,7)
+            ue_radio_meas['lon'] = np.round(lon,7)
+            ue_radio_meas['alt'] = np.round(alt,1)
+
+            ue.connectedToBS = serving_cell_init # returning as it was before
+            ue_radio_meas['n_neighbors'] = ineighbor
+
+            all_radio_measurements.append(ue_radio_meas)
+        return all_radio_measurements
+
+
+

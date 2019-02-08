@@ -1,6 +1,6 @@
 __author__ = 'Mariusz Słabicki, Konrad Połys'
 
-from PyGMO import *
+from pygmo import *
 from pyltes.colorOptimizationProblemsDef import maximalThroughputProblemRR
 from pyltes.colorOptimizationProblemsDef import maximalThroughputProblemFS
 

@@ -16,11 +16,47 @@ class UE(NetworkDevice):
         self.ID = 0
         self.connectedToBS = 0
         self.inside = True
+        self.visibility = {}
+        self.distances = {}
 
     def distanceToBS(self, BS):
+        """
+        Returns a precomputed distance for the given BS
+        or computes the distance, saves it, and then returns it
+        """
+        if self.distances is not None:
+            if BS.ID in self.distances:
+                return self.distances[BS.ID]
+            else:
+                self.distances[BS.ID] = self.get_distance_to_bs(BS)
+                return self.distances[BS.ID]
+        else:
+            self.distances = {}
+            self.distances[BS.ID] = self.get_distance_to_bs(BS)
+            return self.distances[BS.ID]
+
+    def get_distance_to_bs(self, BS):
         return math.sqrt((self.x-BS.x)**2+(self.y-BS.y)**2)
 
     def isSeenFromBS(self, BS):
+        """
+        tries to access visibility if it has been created, 
+        otherwise computes the visibility for the current BS,
+        saves it in a dictionary and returns later this value.
+        """
+        if self.visibility is not None:
+            if BS.ID in self.visibility:
+                return self.visibility[BS.ID]
+            else:
+                self.visibility[BS.ID] = self.is_visible(BS)
+                return self.visibility[BS.ID]
+        else:
+            self.visibility = {}
+            self.visibility[BS.ID] = self.is_visible(BS)
+            return self.visibility[BS.ID]
+
+    # needs improvement to allow for variable width of the arc
+    def is_visible(self, BS):
         if BS.omnidirectionalAntenna == True:
             return True
         #returns true if angle allow signal receive, else False
@@ -36,7 +72,7 @@ class UE(NetworkDevice):
             alpha_diff = BS.angle - ue_angle
         else:
             alpha_diff = ue_angle - BS.angle
-        if alpha_diff <= 60 or alpha_diff >= 300:
+        if alpha_diff <= BS.beamwidth or alpha_diff >= 360-BS.beamwidth:
             return True
         else:
             return False
@@ -129,7 +165,6 @@ class UE(NetworkDevice):
             pRec = pSend
         return pRec
 
-
     def calculateNoise(self, bandwidth=20):
         k = 1.3806488 * math.pow(10, -23)
         T = 293.0
@@ -137,7 +172,45 @@ class UE(NetworkDevice):
         N = 10*math.log10(k*T) + 10*math.log10(BW)
         return N
 
-    def calculateSINRfor(self, where, BS_vector, obstacleVector = None):
+    def calculateRSSI(self, BS_vector, bandwidth=20):
+        """
+        BS_vector is the list of base stations in the network.
+
+        Computes RSSI = signal + interference + noise.
+        """
+        # distance to serving cell
+        R = self.distanceToBS(BS_vector[self.connectedToBS])
+
+        # received power is the transmission power of the serving cell minus path loss due to distance
+        receivedPower_connectedBS=self.calculateReceivedPower(BS_vector[self.connectedToBS].outsidePower, R)
+
+        # need to go through all other stations to collect the interference
+        receivedPower_otherBS_mw = 0
+        for BS in BS_vector:
+            # skip the serving cell and if the cell is not visible from the direction of the UE
+            if self.connectedToBS == BS.ID:
+                continue
+            if not self.isSeenFromBS(BS):
+                continue
+
+            receivedPower_one = self.calculateReceivedPower(BS.outsidePower, self.distanceToBS(BS))
+            receivedPower_otherBS_mw = receivedPower_otherBS_mw + math.pow(10, receivedPower_one/10)
+
+        I_mw = receivedPower_otherBS_mw
+        S_mw = math.pow(10, receivedPower_connectedBS/10)
+        N_mw = math.pow(10, self.calculateNoise(bandwidth)/10)
+
+        RSSI_mw = I_mw + S_mw + N_mw
+        return 10*math.log10(RSSI_mw) # to dBm
+
+    def calculateRSRP(self, BS, RB):
+        R = self.distanceToBS(BS)
+        receivedPower_connectedBS = self.calculateReceivedPower(BS.outsidePower, R)
+        S_mw = math.pow(10, receivedPower_connectedBS/10)
+        rsrp_mw =  S_mw / (12*RB)
+        return 10*math.log10(rsrp_mw)
+
+    def calculateSINRfor(self, where, BS_vector, obstacleVector = None, bandwidth=20):
         if (where not in ["in", "out"]):
             raise Exception("wrong argument")
 
@@ -147,20 +220,20 @@ class UE(NetworkDevice):
         else: # where=="out"
             receivedPower_connectedBS=self.calculateReceivedPower(BS_vector[self.connectedToBS].outsidePower, R)
 
-        a_x = 10
-        a_y = 0
-        b_x = self.x - BS_vector[self.connectedToBS].x
-        b_y = self.y - BS_vector[self.connectedToBS].y
-        aob = a_x * b_x + a_y * b_y
-        cos_alpha = aob / (R * 10)
-        ue_angle_rad = math.acos(cos_alpha)
-        ue_angle = math.trunc(math.degrees(ue_angle_rad))
-
-        if self.y - BS_vector[self.connectedToBS].y < 0:
-            ue_angle = 359 - ue_angle
-
         if len(BS_vector[self.connectedToBS].characteristic) != 0:
+            a_x = 10
+            a_y = 0
+            b_x = self.x - BS_vector[self.connectedToBS].x
+            b_y = self.y - BS_vector[self.connectedToBS].y
+            aob = a_x * b_x + a_y * b_y
+            cos_alpha = aob / (R * 10)
+            ue_angle_rad = math.acos(cos_alpha)
+            ue_angle = math.trunc(math.degrees(ue_angle_rad))
+
+            if self.y - BS_vector[self.connectedToBS].y < 0:
+                ue_angle = 359 - ue_angle
             receivedPower_connectedBS += float(BS_vector[self.connectedToBS].characteristic[ue_angle])
+
         if obstacleVector != None:
             receivedPower_connectedBS -= self.calculateWallLoss(BS_vector, obstacleVector)
 
@@ -197,7 +270,7 @@ class UE(NetworkDevice):
 
         I_mw = receivedPower_otherBS_mw
         S_mw = math.pow(10, receivedPower_connectedBS/10)
-        N_mw = math.pow(10, self.calculateNoise()/10)
+        N_mw = math.pow(10, self.calculateNoise(bandwidth)/10)
 
         SINR_mw = S_mw/(I_mw+N_mw)
         SINR = 10*math.log10(SINR_mw)
@@ -282,6 +355,43 @@ class UE(NetworkDevice):
             capacityForUE_ms = r_i * math.log2(M_i) * 12 * 7 * ((200)/1)
             capacityForUE_s = capacityForUE_ms * 1000
         return capacityForUE_s
+
+    def radio_quantities(self, BS_vector, bandwidth=20):
+        """
+        Assuming the UE is attached to one of the base stations in BS_vectors,
+        the function returns a dict of the following values:
+
+        'ta': timing advance (distance) to the base station
+        'rssi': received signal strength indicator (RSS in dBm)
+        'rsrp': reference signal received power (RSRP in dBm)
+        'rsrq': reference signal received quality (RSRQ in dBm)
+        'sinr': signal to noise & interference ratio (SINR in dBm)
+
+        The bandwidth is required to compute the noise level and
+        to determine the number of resource blocks per channel bandwidth.
+        bandwidths = [1.4, 3.0, 5.0, 10.0, 15.0, 20.0]
+        RBs = [6, 15, 25, 50, 75, 100]
+        """
+        bandwidths = [1.4, 3.0, 5.0, 10.0, 15.0, 20.0]
+        RBs = [6, 15, 25, 50, 75, 100]
+
+        RB = None
+        for (bandwidth_, RB_) in zip(bandwidths, RBs):
+            if np.abs(bandwidth_ - bandwidth) < 0.01:
+                RB = RB_
+                break # found a match
+
+        if RB is None:
+            raise ValueError("input parameter bandwidth={} could not be recognised.".format(bandwidth))
+
+        sinr = self.calculateSINR(BS_vector)
+        rssi = self.calculateRSSI(BS_vector)
+        rsrp = self.calculateRSRP(BS_vector[self.connectedToBS], RB) # in dBm, formula 1
+        # rsrp = rssi - 10*math.log10(12*RB) # in dBm, formula 2
+        rsrq = 10*math.log10(RB) + rsrp - rssi # in dBm
+        ta = self.distanceToBS(BS_vector[self.connectedToBS]) # "Timing Advance" (in meters)
+        return {'id':self.connectedToBS, 'sinr':np.round(sinr,1), 'rssi':np.round(rssi,1), 'rsrp':np.round(rsrp,1), 'rsrq':np.round(rsrq,1), 'ta':np.round(ta,1)}
+
 
 class BS(NetworkDevice):
     """Base Station"""

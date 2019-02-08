@@ -3,7 +3,9 @@ __author__ = 'Mariusz Slabicki, Konrad Połys'
 import math
 import csv
 import random
+
 from pyltes import devices
+from shapely.geometry import Point
 
 class Generator:
     """Class that generates network deployment"""
@@ -177,16 +179,19 @@ class Generator:
     def insertUEingrid(self, numberOfDevices):
         numberOfNodesInRow = math.ceil(math.sqrt(numberOfDevices))
         number = 0
-        x_step = int(self.parent.constraintAreaMaxX)/numberOfNodesInRow
+        x_step = int(self.parent.constraintAreaMaxX)/(2*numberOfNodesInRow)
         y_step = int(self.parent.constraintAreaMaxY)/numberOfNodesInRow
-        for x_pos in range(0, numberOfNodesInRow):
+        for x_pos in range(0, 2*numberOfNodesInRow):
             for y_pos in range(0, numberOfNodesInRow):
-                ue = devices.UE()
-                ue.ID = number
-                ue.x = 0.5*x_step + (x_pos*x_step)
-                ue.y = 0.5*y_step + (y_pos*y_step)
-                self.parent.ue.append(ue)
-                number = number+1
+                x = self.parent.origin[0] + 0.5*x_step + (x_pos*x_step)
+                y = self.parent.origin[1] + 0.5*y_step + (y_pos*y_step)
+                if self.parent.boundary.contains(Point(x,y)):
+                    ue = devices.UE()
+                    ue.ID = number
+                    ue.x = x
+                    ue.y = y
+                    self.parent.ue.append(ue)
+                    number = number+1
 
     def insertUErandomly(self, numberOfDevices):
         number = 0

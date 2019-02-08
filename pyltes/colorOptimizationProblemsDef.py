@@ -1,6 +1,6 @@
 __author__ = 'mslabicki'
 
-from PyGMO.problem import base
+from pygmo.problem import base
 import numpy
 
 class maximalThroughputProblemRR(base):

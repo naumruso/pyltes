@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 import matplotlib
 import math
 
+from matplotlib.patches import Wedge
+
+from shapely.geometry import Point
+
 class Printer:
     """Class that prints network deployment"""
     def __init__(self,parent):
@@ -29,7 +33,10 @@ class Printer:
         plt.savefig(filename+".png", format="png", dpi=300)
         plt.clf()
 
-    def drawNetwork(self, filename, BS=True, UE=True, links=True, obstacles=True, fillMethod="SINR", colorMap = None, drawLegend=True, tilesInLine = 100, figSize = (8, 8), colorMinValue = None, colorMaxValue = None, outputFileFormat = ["png"]):
+    def drawNetwork(self, filename, BS=False, UE=False, links=False, obstacles=False, 
+                    fillMethod="SINR", colorMap = None, drawLegend=True, tilesInLine = 100,
+                    figSize = (8, 8), colorMinValue = None, colorMaxValue = None, 
+                    outputFileFormat = ["png"], WedgeRadius=65):
         main_draw = plt.figure(1, figsize=figSize)
         ax = main_draw.add_subplot(111)
         if fillMethod == "SINR":
@@ -37,17 +44,17 @@ class Printer:
                 cm = plt.cm.get_cmap("viridis")
             else:
                 cm = plt.cm.get_cmap(colorMap)
-            ue = devices.UE()
             imageMatrix = np.zeros((tilesInLine, tilesInLine))
             d_x = round(self.parent.constraintAreaMaxX/tilesInLine)
             d_y = round(self.parent.constraintAreaMaxY/tilesInLine)
-            for x in range(0, tilesInLine):
-                for y in range(0, tilesInLine):
-                    ue.x = x * d_x
-                    ue.y = y * d_y
-                    ue.connectToTheBestBS(self.parent.bs, self.parent.obstacles)
-                    SINR = ue.calculateSINR(self.parent.bs, self.parent.obstacles)
-                    imageMatrix[y][x] = SINR
+            for ix in range(0, tilesInLine):
+                for iy in range(0, tilesInLine):
+                    ue = devices.UE()
+                    ue.x = self.parent.origin[0] + ix * d_x
+                    ue.y = self.parent.origin[1] + iy * d_y
+                    if self.parent.boundary.contains(Point(ue.x,ue.y)):
+                        ue.connectToTheBestBS(self.parent.bs, self.parent.obstacles)
+                        imageMatrix[iy][ix] = ue.calculateSINR(self.parent.bs, self.parent.obstacles)
             if colorMinValue != None:
                 colorMin = colorMinValue
             else:
@@ -56,7 +63,9 @@ class Printer:
                 colorMax = colorMaxValue
             else:
                 colorMax = imageMatrix.max()
-            image = plt.imshow(imageMatrix, vmin=colorMin, vmax=colorMax, origin='lower', extent=[0, self.parent.constraintAreaMaxX, 0, self.parent.constraintAreaMaxY], interpolation='nearest', cmap=cm)
+            extent = [self.parent.origin[0], self.parent.origin[0]+self.parent.constraintAreaMaxX, 
+                      self.parent.origin[1], self.parent.origin[1]+self.parent.constraintAreaMaxY]
+            image = plt.imshow(imageMatrix, vmin=colorMin, vmax=colorMax, origin='lower', extent=extent, interpolation='bilinear', cmap=cm)
             if drawLegend == True:
                 from mpl_toolkits.axes_grid1 import make_axes_locatable
                 divider = make_axes_locatable(ax)
@@ -71,57 +80,64 @@ class Printer:
                 cm = plt.cm.get_cmap("Paired")
             else:
                 cm = plt.cm.get_cmap(colorMap)
-            ue = devices.UE()
             imageMatrix = np.zeros((tilesInLine, tilesInLine))
             d_x = round(self.parent.constraintAreaMaxX/tilesInLine)
             d_y = round(self.parent.constraintAreaMaxY/tilesInLine)
-            for x in range(0, tilesInLine):
-                for y in range(0, tilesInLine):
+            for ix in range(0, tilesInLine):
+                for iy in range(0, tilesInLine):
                     RSSI_best = -1000
                     BS_best = -1
-                    for bs in self.parent.bs:
-                        ue.x = x * d_x
-                        ue.y = y * d_y
-                        if ue.isSeenFromBS(bs) == False:
-                            continue
-                        ue.connectedToBS = bs.ID
-                        temp_RSSI = ue.calculateSINR(self.parent.bs)
-                        if temp_RSSI > RSSI_best:
-                            RSSI_best = temp_RSSI
-                            BS_best = bs.ID
+                    ue = devices.UE()
+                    ue.x = self.parent.origin[0] + ix * d_x
+                    ue.y = self.parent.origin[1] + iy * d_y
+                    if self.parent.boundary.contains(Point(ue.x,ue.y)):
+                        for bs in self.parent.bs:
+                            if not ue.isSeenFromBS(bs):
+                                continue
+                            ue.connectedToBS = bs.ID
+                            temp_RSSI = ue.calculateSINR(self.parent.bs)
+                            if temp_RSSI > RSSI_best:
+                                RSSI_best = temp_RSSI
+                                BS_best = bs.ID
 
-                    imageMatrix[y][x] = BS_best
-            plt.imshow(imageMatrix, origin='lower', extent=[0, self.parent.constraintAreaMaxX, 0, self.parent.constraintAreaMaxY], interpolation='nearest', cmap=cm)
+                    imageMatrix[iy][ix] = BS_best
+            extent = [self.parent.origin[0], self.parent.origin[0]+self.parent.constraintAreaMaxX, 
+                      self.parent.origin[1], self.parent.origin[1]+self.parent.constraintAreaMaxY]
+            # plt.imshow(imageMatrix, origin='lower', extent=extent, interpolation='bilinear', cmap=cm)
+            vmin = np.min(imageMatrix) - 0.5
+            vmax = np.max(imageMatrix) + 0.5
+            cmap = plt.cm.get_cmap('viridis', vmax-vmin)
+            plt.imshow(imageMatrix, interpolation=None, extent=extent, origin='lower', vmin=vmin, vmax=vmax, cmap=cmap)
 
         if BS == True:
-            bs_x_locations = []
-            bs_y_locations = []
-            for bs in self.parent.bs:
-                bs_x_locations.append(bs.x)
-                bs_y_locations.append(bs.y)
-            ax.plot(bs_x_locations, bs_y_locations, 'r^', color="black", markersize=10)
+            bs_x_locations = [bs.x for bs in self.parent.bs]
+            bs_y_locations = [bs.y for bs in self.parent.bs]
+            ax.plot(bs_x_locations, bs_y_locations, 'r^', color="black", markersize=5)
 
         if UE == True:
-            ue_x_locations = []
-            ue_y_locations = []
-            for ue in self.parent.ue:
-                ue_x_locations.append(ue.x)
-                ue_y_locations.append(ue.y)
-            ax.plot(ue_x_locations, ue_y_locations, 'b*', color="black", markersize=10)
+            ue_x_locations = [ue.x for ue in self.parent.ue]
+            ue_y_locations = [ue.y for ue in self.parent.ue]
+            ax.plot(ue_x_locations, ue_y_locations, 'b*', color="black", markersize=2.5)
 
         if links == True:
             for ue in self.parent.ue:
-                ax.arrow(ue.x, ue.y, self.parent.bs[ue.connectedToBS].x - ue.x, self.parent.bs[ue.connectedToBS].y - ue.y)
+                ax.arrow(ue.x, ue.y, self.parent.bs[ue.connectedToBS].x - ue.x, self.parent.bs[ue.connectedToBS].y - ue.y, linewidth=0.25)
 
         if obstacles == True:
             for obstacle in self.parent.obstacles:
-                ax.arrow(obstacle[0], obstacle[1], obstacle[2] - obstacle[0], obstacle[3] - obstacle[1])
+                ax.arrow(obstacle[0], obstacle[1], obstacle[2] - obstacle[0], obstacle[3] - obstacle[1], linewidth=0.25)
 
-        networkBorder = plt.Rectangle((0,0), self.parent.constraintAreaMaxX, self.parent.constraintAreaMaxY, color='black', fill=False)
+        for bs in self.parent.bs:
+            patch = Wedge([bs.x, bs.y], WedgeRadius, bs.angle-60, bs.angle+60, linewidth=0.25, linestyle='-', edgecolor='black', fill=True, alpha=0.25, facecolor='blue')
+            ax.add_patch(patch)
+
+        networkBorder = plt.Rectangle(self.parent.origin, self.parent.constraintAreaMaxX, self.parent.constraintAreaMaxY, color='black', fill=False)
         ax.add_patch(networkBorder)
         ax.axis('equal')
 
-        ax.axis([0, self.parent.constraintAreaMaxX, 0, self.parent.constraintAreaMaxY])
+        extent = [self.parent.origin[0], self.parent.origin[0]+self.parent.constraintAreaMaxX, 
+                  self.parent.origin[1], self.parent.origin[1]+self.parent.constraintAreaMaxY]
+        ax.axis(extent)
         ax.axis('off')
         ax.xaxis.set_visible(False)
         ax.yaxis.set_visible(False)
@@ -132,3 +148,4 @@ class Printer:
                 main_draw.savefig(filename+".pdf", format="pdf", dpi=300, bbox_inches='tight')
         
         plt.clf()
+        return imageMatrix
