@@ -85,19 +85,24 @@ class UE(NetworkDevice):
         if dist == 0 or not BS.turnedOn:
             return False
         
-        return self.is_inside(BS.beam_start, BS.beam_end)
+        return self.is_inside(BS.beam_start, BS.beam_end, x0=BS.x, y0=BS.y)
 
-    def is_inside(self, start, end):
+    def is_inside(self, start, end, x0=0, y0=0):
         """
         Checks whether the device is between the angles start and end.
         The angles are measured counter-clockwise from the x-axis.
+        
+        The check is done in the coordinate system of the UE unless
+        (x0,y0) are passed, which shift the coordinates of the UE,
+        x' -> x - x0,
+        y' -> y - y0.
         """
         if start < 0:
             start = (start+360)%360
         if end < 0:
             end = (end+360)%360
 
-        angle = math.degrees(math.atan2(self.y, self.x))
+        angle = math.degrees(math.atan2(self.y - y0, self.x - x0))
         if angle < 0:
             angle = angle + 360
 
