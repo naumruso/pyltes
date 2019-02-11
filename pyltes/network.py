@@ -420,7 +420,7 @@ class GeoCellularNetwork(CellularNetwork):
                         n_outside += 1
                 n_total = n_inside + n_outside
 
-    def outputRF(self, max_neighbors=7, bandwidth=20):
+    def outputRF(self, max_neighbors=7, bandwidth=20, method='sinr'):
         """
         After all UE's have been generated and connected to the best BS,
         we can compute the SINR, RSSI, RSRP, and RSRQ for the base station,
@@ -436,6 +436,9 @@ class GeoCellularNetwork(CellularNetwork):
 
         RSRP = RSSI – 10LOG(12*N)
         RSRQ = N*(RSRP/RSSI)
+
+        The neighbor finding can be performed by distance (method='dist') or
+        by sinr (method='sinr').
         """
 
         # These are for the base station to which the phone is attached
@@ -446,29 +449,39 @@ class GeoCellularNetwork(CellularNetwork):
 
             # only neighbors that are visible from the UE
             neighbors = []
-            distances = []
             for bs in self.bs:
-                if ue.isSeenFromBS(bs):
+                if ue.isSeenFromBS(bs) and bs.ID != ue.connectedToBS:
                     neighbors.append(bs.ID)
+
+            # copy for safe-keeping
+            serving_cell = ue.connectedToBS
+
+            # we can select the best neighbors based on distance or sinr
+            if method.lower().strip() == 'dist':
+                distances = []
+                for neighbor in neighbors:
                     distances.append(ue.distanceToBS(bs))
+                idx = np.argsort(distances) ## closest stations come first
+            else: ## method == 'sinr'
+                sinr = []
+                for neighbor in neighbors:
+                    ue.connectedToBS = neighbor
+                    sinr.append(ue.calculateSINR(self.bs))
+                idx = np.argsort(sinr)[::-1] ## we need the strongest signal first
 
-            # going through the closest neighbors
-            serving_cell_init = ue.connectedToBS*1 # copying for safe-keeping
             ineighbor = 0
-            for idx in np.argsort(distances):
-                # skip the serving cell, we have information about it.
-                if neighbors[idx] == serving_cell_init:
-                    continue
-                
-                ue.connectedToBS = neighbors[idx]
-                meas_ = ue.radio_quantities(self.bs, bandwidth=bandwidth)
-                meas_.pop('rssi') # this is the same for one UE
-                ue_radio_meas[ineighbor] = meas_
-                ineighbor += 1 # added one neighbor
+            ue_radio_meas['neighbors'] = []
+            for idx_ in idx:
+                ue.connectedToBS = neighbors[idx_]
+                radio_meas = ue.radio_quantities(self.bs, bandwidth=bandwidth)
+                radio_meas.pop('rssi')
+                ue_radio_meas['neighbors'].append(radio_meas)
+                ineighbor += 1
 
-                # stops the cycle once we've found sufficient number of neighbors
                 if ineighbor >= max_neighbors:
                     break
+
+            ue.connectedToBS = serving_cell
 
             # adding the information about the position of the device
             lat, lon, alt = pymap3d.enu2geodetic(ue.x, ue.y, 1.0, self.lat0, self.lon0, self.alt0)
@@ -476,8 +489,7 @@ class GeoCellularNetwork(CellularNetwork):
             ue_radio_meas['lon'] = np.round(lon,7)
             ue_radio_meas['alt'] = np.round(alt,1)
 
-            ue.connectedToBS = serving_cell_init # returning as it was before
-            ue_radio_meas['n_neighbors'] = ineighbor
+            # ue_radio_meas['n_neighbors'] = ineighbor
 
             all_radio_measurements.append(ue_radio_meas)
         return all_radio_measurements
