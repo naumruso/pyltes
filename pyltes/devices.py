@@ -88,38 +88,19 @@ class UE(NetworkDevice):
         return self.is_inside(BS.beam_start, BS.beam_end, x0=BS.x, y0=BS.y)
 
     def is_inside(self, start, end, x0=0, y0=0):
-        """
-        Checks whether the device is between the angles start and end.
-        The angles are measured counter-clockwise from the x-axis.
-        
-        The check is done in the coordinate system of the UE unless
-        (x0,y0) are passed, which shift the coordinates of the UE,
-        x' -> x - x0,
-        y' -> y - y0.
-        """
-        if start < 0:
-            start = (start+360)%360
-        if end < 0:
-            end = (end+360)%360
-
         angle = math.degrees(math.atan2(self.y - y0, self.x - x0))
         if angle < 0:
             angle = angle + 360
 
-        if start < end:
-            if start < angle < end:
-                return True
-            else:
-                return False
-        elif start > end:
-            if angle > end and angle > start:
-                return True
-            elif angle < end and angle < start:
-                return True
-            else:
-                return False
-        else:
-            return False
+        end = end - start
+        if end < 0:
+            end = end + 360
+
+        angle = angle - start
+        if angle < 0:
+            angle = angle + 360
+
+        return angle < end
 
     def connectToNearestBS(self, BS_vector):
         closestDistance = -1

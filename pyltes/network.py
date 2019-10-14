@@ -333,8 +333,13 @@ class GeoCellularNetwork(CellularNetwork):
             bslon = cell['bslon']
             bsalt = cell['antennaheight']
             azimuth = cell['azimuth']
-            azimuth = (360 - azimuth + 90)%360 # to trigonometic system (angles counted counter-clockwise from the x-axis)
-            beamwidth = cell['horizbeamwidth'] # half the beam width, actually.
+            beamwidth = cell['horizbeamwidth'] # full beam-width
+
+            transform_angle = lambda angle: (90 - angle) % 360 # to trigonometric system (angles counter counter-clockwise from the x-axis)
+            start_angle = transform_angle(azimuth + beamwidth / 2)
+            end_angle = transform_angle(azimuth - beamwidth / 2)
+            if end_angle < start_angle:
+                end_angle + 360
 
             # convert the Cell's coordinates to our local tangential system
             x, y, _ = pymap3d.geodetic2enu(bslat, bslon, bsalt, self.lat0, self.lon0, self.alt0)
@@ -346,10 +351,9 @@ class GeoCellularNetwork(CellularNetwork):
                 bs.y = y
                 bs.insidePower = 37
                 bs.outsidePower = 40
-                bs.angle = azimuth
-                # start and end angles of the beam (counted counter-clockwise from the x-axis)
-                bs.beam_start = (azimuth - beamwidth + 360)%360
-                bs.beam_end = (azimuth + beamwidth + 360)%360
+                bs.angle = azimuth_t
+                bs.beam_start = start_angle
+                bs.beam_end = end_angle
                 bs.ID = len(self.bs)
                 bs.turnedOn = True
                 bs.beamwidth = beamwidth
