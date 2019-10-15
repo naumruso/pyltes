@@ -351,7 +351,7 @@ class GeoCellularNetwork(CellularNetwork):
                 bs.y = y
                 bs.insidePower = 37
                 bs.outsidePower = 40
-                bs.angle = azimuth_t
+                bs.angle = transform_angle(azimuth)
                 bs.beam_start = start_angle
                 bs.beam_end = end_angle
                 bs.ID = len(self.bs)
